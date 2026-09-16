@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.optimizer
 
+import org.apache.spark.sql.catalyst.analysis.UpdateAttributeNullability
 import org.apache.spark.sql.catalyst.dsl.expressions._
 import org.apache.spark.sql.catalyst.dsl.plans._
 import org.apache.spark.sql.catalyst.plans.PlanTest
@@ -69,6 +70,18 @@ class OptimizerRuleExclusionSuite extends PlanTest {
         CombineUnions.ruleName,
         RemoveLiteralFromGroupExpressions.ruleName,
         RemoveRepetitionFromGroupExpressions.ruleName))
+  }
+
+  test("Exclude rules wrapped by early filter pruning") {
+    verifyExcludedRules(
+      new SimpleTestOptimizer(),
+      Seq(
+        PushDownPredicates.ruleName,
+        ConstantFolding.ruleName,
+        PruneFilters.ruleName,
+        PropagateEmptyRelation.ruleName,
+        UpdateAttributeNullability.ruleName,
+        CombineUnions.ruleName))
   }
 
   test("Exclude non-existent rule with other valid rules") {

@@ -24,7 +24,7 @@ import org.apache.spark.sql.catalyst.dsl.plans._
 import org.apache.spark.sql.catalyst.expressions.{Add, Alias, ArrayCompact, AttributeReference, CreateArray, CreateStruct, IntegerLiteral, Literal, MapFromEntries, Multiply, NamedExpression, NullIf, Remainder, RuntimeReplaceable}
 import org.apache.spark.sql.catalyst.expressions.aggregate.Sum
 import org.apache.spark.sql.catalyst.plans.PlanTest
-import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, LocalRelation, LogicalPlan, OneRowRelation, Project}
+import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Filter, LocalRelation, LogicalPlan, OneRowRelation, Project, Range, Union}
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.{ArrayType, BooleanType, IntegerType, MapType, StructField, StructType}
@@ -39,6 +39,74 @@ object DecrementLiterals extends Rule[LogicalPlan] {
 }
 
 class OptimizerSuite extends PlanTest {
+  private def constantFalseUnion = {
+    val live = Range(0, 1, 1, Some(1)).select(Literal(1L).as("a"))
+    val deadInput = Range(0, 1, 1, Some(1))
+    val dead = deadInput
+      .select((deadInput.output.head * 2).as("a"))
+      .where((Literal(1) + Literal(1)) === Literal(3))
+    live.union(dead).analyze
+  }
+
+  test("prune constant-false union branches before operator optimization") {
+    var visitedRejectedExpression = false
+    val rejectIfVisited = new Rule[LogicalPlan] {
+      override def apply(plan: LogicalPlan): LogicalPlan = {
+        visitedRejectedExpression = plan.exists(_.expressions.exists(_.exists {
+          case _: Multiply => true
+          case _ => false
+        }))
+        plan
+      }
+    }
+    val optimizer = new SimpleTestOptimizer() {
+      override def preOperatorOptimizationRules: Seq[Rule[LogicalPlan]] = Seq(rejectIfVisited)
+    }
+    optimizer.execute(constantFalseUnion)
+
+    assert(!visitedRejectedExpression)
+  }
+
+  test("early filter pruning preserves optimizer semantics") {
+    val withoutEarlyPruning = new SimpleTestOptimizer() {
+      override def defaultBatches: Seq[Batch] =
+        super.defaultBatches.filterNot(_.name == "Early Filter Pruning")
+    }
+
+    comparePlans(
+      SimpleTestOptimizer.execute(constantFalseUnion),
+      withoutEarlyPruning.execute(constantFalseUnion))
+  }
+
+  test("early filter pruning stops after the triggering pattern disappears") {
+    val range = Range(0, 1, 1, Some(1))
+    Seq[(LogicalPlan, LogicalPlan => LogicalPlan)](
+      Filter(Literal(true), range) -> {
+        case f: Filter => f.child
+        case plan => plan
+      },
+      Union(Seq(range, range.newInstance())) -> {
+        case u: Union => u.children.head
+        case plan => plan
+      }).foreach { case (input, removePattern) =>
+      var runs = 0
+      val remove = new Rule[LogicalPlan] {
+        override def apply(plan: LogicalPlan): LogicalPlan = {
+          runs += 1
+          removePattern(plan)
+        }
+      }
+      val optimizer = new SimpleTestOptimizer() {
+        override def defaultBatches: Seq[Batch] =
+          Batch("test", fixedPoint, earlyFilterPruningRule(remove)) :: Nil
+      }
+
+      optimizer.execute(input)
+
+      assert(runs === 1)
+    }
+  }
+
   test("Optimizer exceeds max iterations") {
     val iterations = 5
     val maxIterationsNotEnough = 3

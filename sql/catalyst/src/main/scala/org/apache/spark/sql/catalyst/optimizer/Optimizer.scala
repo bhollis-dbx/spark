@@ -75,6 +75,15 @@ abstract class Optimizer(catalogManager: CatalogManager)
       conf.optimizerMaxIterations,
       maxIterationsSetting = SQLConf.OPTIMIZER_MAX_ITERATIONS.key)
 
+  private[optimizer] def earlyFilterPruningRule(rule: Rule[LogicalPlan]): Rule[LogicalPlan] =
+    new Rule[LogicalPlan] {
+      override val ruleName: String = rule.ruleName
+
+      override def apply(plan: LogicalPlan): LogicalPlan = {
+        if (plan.containsAnyPattern(UNION, FILTER)) rule(plan) else plan
+      }
+    }
+
   /**
    * A helper method that takes as input a Seq of Batch or Seq[Batch], and flattens it out.
    */
@@ -202,6 +211,14 @@ abstract class Optimizer(catalogManager: CatalogManager)
       RemoveNoopOperators,
       CombineUnions,
       RemoveNoopUnion),
+    Batch("Early Filter Pruning", fixedPoint,
+      Seq(
+        PushDownPredicates,
+        ConstantFolding,
+        PruneFilters,
+        PropagateEmptyRelation,
+        UpdateAttributeNullability,
+        CombineUnions).map(earlyFilterPruningRule): _*),
     // Run this once earlier. This might simplify the plan and reduce cost of optimizer.
     // For example, a query such as Filter(LocalRelation) would go through all the heavy
     // optimizer rules that are triggered when there is a filter
