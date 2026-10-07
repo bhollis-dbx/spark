@@ -19,8 +19,7 @@ package org.apache.spark.sql.catalyst.optimizer
 
 import org.apache.spark.sql.catalyst.dsl.expressions._
 import org.apache.spark.sql.catalyst.dsl.plans._
-import org.apache.spark.sql.catalyst.expressions.{Alias, Expression, GetStructField, Literal,
-  UpdateFields, With, WithField}
+import org.apache.spark.sql.catalyst.expressions.{Alias, Expression, Literal, UpdateFields, With}
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.catalyst.plans.logical.{LocalRelation, LogicalPlan}
 import org.apache.spark.sql.catalyst.rules.RuleExecutor
@@ -34,8 +33,7 @@ class ReplaceUpdateFieldsExpressionSuite extends PlanTest {
 
   private def nestedUpdates(struct: Expression, depth: Int): Expression = {
     (0 until depth).foldLeft(struct) { (current, index) =>
-      UpdateFields(current, Seq(WithField("nested",
-        UpdateFields(GetStructField(current, 0), Seq(WithField(s"field$index", Literal(index)))))))
+      UpdateFields(current, s"nested.field$index", Literal(index))
     }
   }
 

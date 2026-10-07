@@ -28,7 +28,7 @@ import org.apache.spark.sql.catalyst.expressions.Cast._
 import org.apache.spark.sql.catalyst.expressions.codegen._
 import org.apache.spark.sql.catalyst.expressions.codegen.Block._
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
-import org.apache.spark.sql.catalyst.trees.{LeafLike, UnaryLike}
+import org.apache.spark.sql.catalyst.trees.{LeafLike, TreeNodeTag, UnaryLike}
 import org.apache.spark.sql.catalyst.trees.TreePattern._
 import org.apache.spark.sql.catalyst.util._
 import org.apache.spark.sql.errors.QueryCompilationErrors
@@ -770,6 +770,8 @@ case class DropField(name: String) extends StructFieldsOperation with LeafLike[E
 case class UpdateFields(structExpr: Expression, fieldOps: Seq[StructFieldsOperation])
   extends Unevaluable {
 
+  private lazy val generatedStructReadOwner = UpdateFields.generatedStructReadOwner(this)
+
   final override val nodePatterns: Seq[TreePattern] = Seq(UPDATE_FIELDS)
 
   override def checkInputDataTypes(): TypeCheckResult = {
@@ -809,7 +811,8 @@ case class UpdateFields(structExpr: Expression, fieldOps: Seq[StructFieldsOperat
   private lazy val newFieldExprs: Seq[(StructField, Expression)] = {
     def getFieldExpr(i: Int): Expression = structExpr match {
       case c: CreateNamedStruct => c.valExprs(i)
-      case _ => GetStructField(structExpr, i)
+      case _ => UpdateFields.markGeneratedStructRead(
+        GetStructField(structExpr, i), generatedStructReadOwner)
     }
     val fieldsWithIndex = structExpr.dataType.asInstanceOf[StructType].fields.zipWithIndex
     val existingFieldExprs: Seq[(StructField, Expression)] =
@@ -824,9 +827,11 @@ case class UpdateFields(structExpr: Expression, fieldOps: Seq[StructFieldsOperat
   lazy val evalExpr: Expression = With(structExpr) { case Seq(structRef) =>
     // Without this rewrite, every copied field would contain the full expression that builds the
     // original struct. Read those fields from one shared result instead, so that expression appears
-    // only once. Use object identity so separate expressions that look the same remain separate.
+    // only once. Do not change field values supplied by the caller; they must remain separate.
     def replaceStruct(expr: Expression): Expression = expr.transformDown {
-      case field @ GetStructField(child, _, _) if child.eq(structExpr) =>
+      case field @ GetStructField(child, _, _)
+          if UpdateFields.isGeneratedStructRead(field, generatedStructReadOwner) &&
+            child.eq(structExpr) =>
         field.copy(child = structRef)
     }
 
@@ -843,6 +848,28 @@ case class UpdateFields(structExpr: Expression, fieldOps: Seq[StructFieldsOperat
 }
 
 object UpdateFields {
+  private val GENERATED_STRUCT_READ = TreeNodeTag[ExprId]("generatedStructRead")
+  private val GENERATED_STRUCT_READ_OWNER = TreeNodeTag[ExprId]("generatedStructReadOwner")
+
+  private def generatedStructReadOwner(expr: Expression): ExprId = {
+    expr.getTagValue(GENERATED_STRUCT_READ_OWNER).getOrElse {
+      val owner = NamedExpression.newExprId
+      expr.setTagValue(GENERATED_STRUCT_READ_OWNER, owner)
+      owner
+    }
+  }
+
+  private def markGeneratedStructRead[T <: Expression](expr: T, owner: ExprId): T = {
+    expr.setTagValue(GENERATED_STRUCT_READ, owner)
+    expr
+  }
+
+  private def isGeneratedStructRead(expr: Expression, owner: ExprId): Boolean =
+    expr.getTagValue(GENERATED_STRUCT_READ).contains(owner)
+
+  private[catalyst] def isGeneratedStructRead(expr: Expression): Boolean =
+    expr.containsTag(GENERATED_STRUCT_READ)
+
   private def nameParts(fieldName: String): Seq[String] = {
     require(fieldName != null, "fieldName cannot be null")
 
@@ -886,7 +913,9 @@ object UpdateFields {
         structExpr = newStruct,
         namePartsRemaining = namePartsRemaining.tail,
         valueFunc = valueFunc)
-      UpdateFields(structExpr, WithField(fieldName, newValue) :: Nil)
+      val updated = UpdateFields(structExpr, WithField(fieldName, newValue) :: Nil)
+      markGeneratedStructRead(newStruct, generatedStructReadOwner(updated))
+      updated
     }
   }
 }

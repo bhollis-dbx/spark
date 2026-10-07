@@ -28,7 +28,8 @@ import org.scalatest.matchers.should.Matchers._
 
 import org.apache.spark.{SparkException, SparkRuntimeException}
 import org.apache.spark.sql.UpdateFieldsBenchmark._
-import org.apache.spark.sql.catalyst.expressions.{InSet, Literal, NamedExpression, With}
+import org.apache.spark.sql.catalyst.expressions.{GetStructField, InSet, Literal, NamedExpression,
+  UpdateFields, With, WithField}
 import org.apache.spark.sql.catalyst.util.DateTimeTestUtils.{outstandingTimezonesIds, outstandingZoneIds}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.catalyst.util.TimestampNanosTestUtils.foreachNanosPrecision
@@ -460,6 +461,85 @@ class ColumnExpressionSuite extends SharedSparkSession {
         assert(result.getLong(0) == result.getLong(1))
         assert(copy.getLong(0) == copy.getLong(1))
         assert(result.getLong(0) != copy.getLong(0))
+      }
+    }
+  }
+
+  test("withField should evaluate a reused nondeterministic value separately") {
+    onEachEvalPath {
+      val counter = new java.util.concurrent.atomic.AtomicLong()
+      val nextStruct = udf(() => {
+        val value = counter.getAndIncrement()
+        (value, value)
+      }).asNondeterministic()
+      val structExpr = nextStruct().expr
+      val updated = Column(UpdateFields(structExpr,
+        Seq(WithField("copy", GetStructField(structExpr, 0)))))
+      val df = spark.range(0, 10, 1, 1)
+      df.select(updated).collect().foreach { row =>
+        val result = row.getStruct(0)
+        assert(result.getLong(0) == result.getLong(1))
+        assert(result.getLong(0) != result.getLong(2))
+      }
+    }
+  }
+
+  test("withField should evaluate a reused nested update separately") {
+    onEachEvalPath {
+      val counter = new java.util.concurrent.atomic.AtomicLong()
+      val nextStruct = udf(() => {
+        val value = counter.getAndIncrement()
+        (value, value)
+      }).asNondeterministic()
+      val structExpr = nextStruct().expr
+      val nestedUpdate = UpdateFields(structExpr, Seq(WithField("extra", Literal(1))))
+      val updated = Column(UpdateFields(structExpr,
+        Seq(WithField("copy", GetStructField(nestedUpdate, 0)))))
+      val df = spark.range(0, 10, 1, 1)
+      df.select(updated).collect().foreach { row =>
+        val result = row.getStruct(0)
+        assert(result.getLong(0) == result.getLong(1))
+        assert(result.getLong(0) != result.getLong(2))
+      }
+    }
+  }
+
+  test("withField should reuse an updated struct for a nested path") {
+    onEachEvalPath {
+      val counter = new java.util.concurrent.atomic.AtomicLong()
+      val nextStruct = udf(() => {
+        val value = counter.getAndIncrement()
+        ((value, value), value)
+      }).asNondeterministic()
+      val structExpr = nextStruct().expr
+      val baseUpdate = UpdateFields(structExpr, Seq(WithField("extra", Literal(1))))
+      val updated = Column(UpdateFields(baseUpdate, "_1.copy", Literal(1)))
+      val df = spark.range(0, 10, 1, 1)
+      df.select(updated).collect().foreach { row =>
+        val result = row.getStruct(0)
+        val nested = result.getStruct(0)
+        assert(nested.getLong(0) == nested.getLong(1))
+        assert(nested.getLong(0) == result.getLong(1))
+      }
+    }
+  }
+
+  test("withField should preserve a nested path through a later update") {
+    onEachEvalPath {
+      val counter = new java.util.concurrent.atomic.AtomicLong()
+      val nextStruct = udf(() => {
+        val value = counter.getAndIncrement()
+        ((value, value), value)
+      }).asNondeterministic()
+      val structExpr = nextStruct().expr
+      val nestedUpdate = UpdateFields(structExpr, "_1.copy", Literal(1))
+      val updated = Column(UpdateFields(nestedUpdate, Seq(WithField("extra", Literal(1)))))
+      val df = spark.range(0, 10, 1, 1)
+      df.select(updated).collect().foreach { row =>
+        val result = row.getStruct(0)
+        val nested = result.getStruct(0)
+        assert(nested.getLong(0) == nested.getLong(1))
+        assert(nested.getLong(0) == result.getLong(1))
       }
     }
   }
