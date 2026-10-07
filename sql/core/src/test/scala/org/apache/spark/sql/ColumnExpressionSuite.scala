@@ -445,6 +445,40 @@ class ColumnExpressionSuite extends SharedSparkSession {
       SQLConf.CODEGEN_FACTORY_MODE.key -> "CODEGEN_ONLY")(f)
   }
 
+  test("withField should evaluate a nondeterministic struct expression once") {
+    onEachEvalPath {
+      val counter = new java.util.concurrent.atomic.AtomicLong()
+      val nextStruct = udf(() => {
+        val value = counter.getAndIncrement()
+        (value, value)
+      }).asNondeterministic()
+      val structExpr = nextStruct()
+      val df = spark.range(0, 10, 1, 1)
+      df.select(structExpr.withField("copy", structExpr)).collect().foreach { row =>
+        val result = row.getStruct(0)
+        val copy = result.getStruct(2)
+        assert(result.getLong(0) == result.getLong(1))
+        assert(copy.getLong(0) == copy.getLong(1))
+        assert(result.getLong(0) != copy.getLong(0))
+      }
+    }
+  }
+
+  test("withField should not evaluate a value expression for null structs") {
+    onEachEvalPath {
+      withSQLConf(SQLConf.ANSI_ENABLED.key -> "true") {
+        val structType = StructType(Seq(StructField("a", IntegerType, nullable = false)))
+        val df = spark.range(0, 3, 1, 1).select(
+          $"id",
+          when($"id" < 2, lit(null).cast(structType))
+            .otherwise(struct(lit(1)).cast(structType)).as("s"))
+        checkAnswer(
+          df.select($"s".withField("b", lit(1.0) / ($"id" - 1))),
+          Seq(Row(null), Row(null), Row(Row(1, 1.0))))
+      }
+    }
+  }
+
   test("SPARK-58902: BETWEEN on a nondeterministic input inside a conditional branch") {
     onEachEvalPath {
       // `BETWEEN` reads its input twice. Inlining the common expression into a branch gave each

@@ -821,13 +821,18 @@ case class UpdateFields(structExpr: Expression, fieldOps: Seq[StructFieldsOperat
 
   lazy val newExprs: Seq[Expression] = newFieldExprs.map(_._2)
 
-  lazy val evalExpr: Expression = {
+  lazy val evalExpr: Expression = With(structExpr) { case Seq(structRef) =>
+    def replaceStruct(expr: Expression): Expression = expr.transformDown {
+      case field @ GetStructField(child, _, _) if child.eq(structExpr) =>
+        field.copy(child = structRef)
+    }
+
     val createNamedStructExpr = CreateNamedStruct(newFieldExprs.flatMap {
-      case (field, expr) => Seq(Literal(field.name), expr)
+      case (field, expr) => Seq(Literal(field.name), replaceStruct(expr))
     })
 
     if (structExpr.nullable) {
-      If(IsNull(structExpr), Literal(null, dataType), createNamedStructExpr)
+      If(IsNull(structRef), Literal(null, dataType), createNamedStructExpr)
     } else {
       createNamedStructExpr
     }
