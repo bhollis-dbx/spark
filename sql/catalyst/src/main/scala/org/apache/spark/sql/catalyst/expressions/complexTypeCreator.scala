@@ -822,6 +822,9 @@ case class UpdateFields(structExpr: Expression, fieldOps: Seq[StructFieldsOperat
   lazy val newExprs: Seq[Expression] = newFieldExprs.map(_._2)
 
   lazy val evalExpr: Expression = With(structExpr) { case Seq(structRef) =>
+    // Without this rewrite, every copied field would contain the full expression that builds the
+    // original struct. Read those fields from one shared result instead, so that expression appears
+    // only once. Use object identity so separate expressions that look the same remain separate.
     def replaceStruct(expr: Expression): Expression = expr.transformDown {
       case field @ GetStructField(child, _, _) if child.eq(structExpr) =>
         field.copy(child = structRef)

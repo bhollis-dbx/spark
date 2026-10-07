@@ -301,6 +301,11 @@ abstract class Optimizer(catalogManager: CatalogManager)
       RemoveNoopOperators),
     // This batch must be executed after the `RewriteSubquery` batch, which creates joins.
     Batch("NormalizeFloatingNumbers", Once, NormalizeFloatingNumbers),
+    // ReplaceUpdateFieldsExpression makes the expression that builds the struct appear once instead
+    // of once per field. It uses With as a marker for the shared result; RewriteWithExpression
+    // removes that marker while keeping the sharing. Repeat because an update can contain another
+    // update. The rewrite can add layers that only select columns, so CollapseProject combines
+    // them.
     Batch("ReplaceUpdateFieldsExpression", fixedPoint,
       ReplaceUpdateFieldsExpression,
       RewriteWithExpression,
