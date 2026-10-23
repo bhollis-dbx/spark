@@ -54,8 +54,10 @@ class PlanChangeLogger[TreeType <: TreeNode[_]] extends Logging {
 
   private val logBatches = SQLConf.get.planChangeBatches.map(Utils.stringToSeq)
 
+  private[rules] def isEnabled: Boolean = log.isEnabledForLevel(logLevel)
+
   def logRule(ruleName: String, oldPlan: TreeType, newPlan: TreeType): Unit = {
-    if (log.isEnabledForLevel(logLevel)) {
+    if (isEnabled) {
       if ((logRules.isEmpty || logRules.get.contains(ruleName)) &&
           !newPlan.fastEquals(oldPlan)) {
         val oldPlanStringWithOutput = oldPlan.treeString(verbose = false,
@@ -104,10 +106,10 @@ class PlanChangeLogger[TreeType <: TreeNode[_]] extends Logging {
   }
 
   def logMetrics(name: String, metrics: QueryExecutionMetrics): Unit = {
-    val totalTime = metrics.time / NANOS_PER_MILLIS.toDouble
-    val totalTimeEffective = metrics.timeEffective / NANOS_PER_MILLIS.toDouble
-    // scalastyle:off line.size.limit
-    val message: MessageWithContext =
+    logBasedOnLevel(logLevel) {
+      val totalTime = metrics.time / NANOS_PER_MILLIS.toDouble
+      val totalTimeEffective = metrics.timeEffective / NANOS_PER_MILLIS.toDouble
+      // scalastyle:off line.size.limit
       log"""
          |=== Metrics of Executed Rules ${MDC(RULE_EXECUTOR_NAME, name)} ===
          |Total number of runs: ${MDC(NUM_RULE_OF_RUNS, metrics.numRuns)}
@@ -115,9 +117,8 @@ class PlanChangeLogger[TreeType <: TreeNode[_]] extends Logging {
          |Total number of effective runs: ${MDC(NUM_EFFECTIVE_RULE_OF_RUNS, metrics.numEffectiveRuns)}
          |Total time of effective runs: ${MDC(TOTAL_EFFECTIVE_TIME, totalTimeEffective)} ms
       """.stripMargin
-    // scalastyle:on line.size.limit
-
-    logBasedOnLevel(logLevel)(message)
+      // scalastyle:on line.size.limit
+    }
   }
 }
 
@@ -216,7 +217,7 @@ abstract class RuleExecutor[TreeType <: TreeNode[_]] extends Logging {
     val queryExecutionMetrics = RuleExecutor.queryExecutionMeter
     val planChangeLogger = new PlanChangeLogger[TreeType]()
     val tracker: Option[QueryPlanningTracker] = QueryPlanningTracker.get
-    val beforeMetrics = RuleExecutor.getCurrentMetrics()
+    val beforeMetrics = Option.when(planChangeLogger.isEnabled)(RuleExecutor.getCurrentMetrics())
 
     val fullValidation = SQLConf.get.getConf(SQLConf.PLAN_CHANGE_VALIDATION)
     lazy val lightweightValidation = SQLConf.get.getConf(SQLConf.LIGHTWEIGHT_PLAN_CHANGE_VALIDATION)
@@ -318,7 +319,9 @@ abstract class RuleExecutor[TreeType <: TreeNode[_]] extends Logging {
 
       planChangeLogger.logBatch(batch.name, batchStartPlan, curPlan)
     }
-    planChangeLogger.logMetrics(name, RuleExecutor.getCurrentMetrics() - beforeMetrics)
+    beforeMetrics.foreach { before =>
+      planChangeLogger.logMetrics(name, RuleExecutor.getCurrentMetrics() - before)
+    }
 
     curPlan
   }

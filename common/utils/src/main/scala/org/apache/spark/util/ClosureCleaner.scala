@@ -335,11 +335,9 @@ private[spark] object ClosureCleaner extends Logging {
     // An outer object at a given index is of type outer class at the same index
     val (outerClasses, outerObjects) = getOuterClassesAndObjects(func)
 
-    // For logging purposes only
-    val declaredFields = func.getClass.getDeclaredFields
-    val declaredMethods = func.getClass.getDeclaredMethods
-
     if (log.isDebugEnabled) {
+      val declaredFields = func.getClass.getDeclaredFields
+      val declaredMethods = func.getClass.getDeclaredMethods
       logDebug(s" + declared fields: ${declaredFields.size}")
       declaredFields.foreach { f => logDebug(s"     $f") }
       logDebug(s" + declared methods: ${declaredMethods.size}")
@@ -371,8 +369,10 @@ private[spark] object ClosureCleaner extends Logging {
       }
     }
 
-    logDebug(s" + fields accessed by starting closure: ${accessedFields.size} classes")
-    accessedFields.foreach { f => logDebug("     " + f) }
+    if (log.isDebugEnabled) {
+      logDebug(s" + fields accessed by starting closure: ${accessedFields.size} classes")
+      accessedFields.foreach { f => logDebug("     " + f) }
+    }
 
     // List of outer (class, object) pairs, ordered from outermost to innermost
     // Note that all outer objects but the outermost one (first one in this list) must be closures
@@ -467,8 +467,10 @@ private[spark] object ClosureCleaner extends Logging {
       Map.empty,
       cleanTransitively)
 
-    logDebug(s" + fields accessed by starting closure: ${accessedFields.size} classes")
-    accessedFields.foreach { f => logDebug("     " + f) }
+    if (log.isDebugEnabled) {
+      logDebug(s" + fields accessed by starting closure: ${accessedFields.size} classes")
+      accessedFields.foreach { f => logDebug("     " + f) }
+    }
 
     if (accessedFields(capturingClass).size < capturingClass.getDeclaredFields.length) {
       // clone and clean the enclosing `this` only when there are fields to null out
@@ -551,9 +553,11 @@ private[spark] object ClosureCleaner extends Logging {
       ammCmdInstances,
       cleanTransitively)
 
-    logTrace(s" + command fields accessed by starting closure: " +
-      s"${accessedAmmCmdFields.size} classes")
-    accessedAmmCmdFields.foreach { f => logTrace("     " + f) }
+    if (log.isTraceEnabled) {
+      logTrace(s" + command fields accessed by starting closure: " +
+        s"${accessedAmmCmdFields.size} classes")
+      accessedAmmCmdFields.foreach { f => logTrace("     " + f) }
+    }
 
     val cmdClones = Map[Class[_], AnyRef]()
     for ((cmdClass, _) <- ammCmdInstances if !cmdClass.getName.contains("Helper")) {

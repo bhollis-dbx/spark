@@ -19,6 +19,12 @@ package org.apache.spark.util
 
 import java.io.NotSerializableException
 
+import scala.collection.mutable
+
+import org.apache.logging.log4j.Level
+import org.mockito.ArgumentMatchers.any
+import org.mockito.Mockito.{spy, times, verify}
+
 import org.apache.spark.{SparkContext, SparkException, SparkFunSuite, TaskContext}
 import org.apache.spark.LocalSparkContext._
 import org.apache.spark.partial.CountEvaluator
@@ -26,6 +32,26 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.util.ArrayImplicits._
 
 class ClosureCleanerSuite extends SparkFunSuite {
+  test("disabled closure logging does not traverse accessed fields") {
+    class Logging$anonfun$Closure extends Function0[Int] with Serializable {
+      override def apply(): Int = 1
+    }
+    val closure = new Logging$anonfun$Closure
+    val accessedFields = spy(mutable.Map.empty[Class[_], mutable.Set[String]])
+    accessedFields.put(closure.getClass, mutable.Set.empty[String])
+    val appender = new LogAppender("closure fields")
+    appender.setThreshold(Level.DEBUG)
+    Seq(Level.INFO, Level.DEBUG).foreach { level =>
+      withLogAppender(appender, Seq("org.apache.spark.util.ClosureCleaner"), Some(level)) {
+        ClosureCleaner.clean(closure, cleanTransitively = true, accessedFields)
+        assert(closure() == 1)
+      }
+      verify(accessedFields, times(if (level == Level.DEBUG) 1 else 0)).foreach[Unit](any())
+    }
+    assert(appender.loggingEvents.exists(
+      _.getMessage.getFormattedMessage.contains("fields accessed by starting closure")))
+  }
+
   test("closures inside an object") {
     assert(TestObject.run() === 30) // 6 + 7 + 8 + 9
   }

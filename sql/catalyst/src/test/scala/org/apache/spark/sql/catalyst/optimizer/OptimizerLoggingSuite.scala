@@ -18,6 +18,7 @@
 package org.apache.spark.sql.catalyst.optimizer
 
 import org.apache.logging.log4j.Level
+import org.mockito.Mockito.{mock, verifyNoInteractions}
 import org.slf4j.event.{Level => Slf4jLevel}
 
 import org.apache.spark.SparkIllegalArgumentException
@@ -26,7 +27,7 @@ import org.apache.spark.sql.catalyst.dsl.plans._
 import org.apache.spark.sql.catalyst.expressions.InSet
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.catalyst.plans.logical.{LocalRelation, LogicalPlan}
-import org.apache.spark.sql.catalyst.rules.RuleExecutor
+import org.apache.spark.sql.catalyst.rules.{PlanChangeLogger, QueryExecutionMetrics, RuleExecutor}
 import org.apache.spark.sql.internal.SQLConf
 
 class OptimizerLoggingSuite extends PlanTest {
@@ -111,6 +112,38 @@ class OptimizerLoggingSuite extends PlanTest {
           "confName" -> SQLConf.PLAN_CHANGE_LOG_LEVEL.key,
           "confValue" -> level,
           "confOptions" -> classOf[Slf4jLevel].getEnumConstants.mkString(", ")))
+    }
+  }
+
+  test("disabled plan change logging does not read metrics") {
+    withSQLConf(SQLConf.PLAN_CHANGE_LOG_LEVEL.key -> "DEBUG") {
+      withLogAppender(new LogAppender("disabled plan metrics"),
+        loggerNames = Seq(classOf[PlanChangeLogger[_]].getName),
+        level = Some(Level.WARN)) {
+        val metrics = mock(classOf[QueryExecutionMetrics])
+        new PlanChangeLogger[LogicalPlan]().logMetrics("test", metrics)
+        verifyNoInteractions(metrics)
+      }
+    }
+  }
+
+  test("disabled plan change logging does not prepare an executor metrics report") {
+    var reports = 0
+    val executor = new RuleExecutor[LogicalPlan] {
+      override protected def name: String = {
+        reports += 1
+        "test"
+      }
+      override val batches: Seq[Batch] = Nil
+    }
+    withSQLConf(SQLConf.PLAN_CHANGE_LOG_LEVEL.key -> "DEBUG") {
+      withLogAppender(new LogAppender("disabled executor metrics"),
+        loggerNames = Seq(classOf[PlanChangeLogger[_]].getName),
+        level = Some(Level.WARN)) {
+        val plan = LocalRelation()
+        assert(executor.execute(plan) eq plan)
+        assert(reports == 0)
+      }
     }
   }
 

@@ -61,7 +61,11 @@ private[spark] class Instrumentation private () extends Logging with MLEvents {
   /**
    * Log some data about the dataset being fit.
    */
-  def logDataset(dataset: Dataset[_]): Unit = logDataset(dataset.rdd)
+  def logDataset(dataset: Dataset[_]): Unit = {
+    if (log.isInfoEnabled) {
+      logDataset(dataset.rdd)
+    }
+  }
 
   /**
    * Log some data about the dataset being fit.
@@ -136,14 +140,16 @@ private[spark] class Instrumentation private () extends Logging with MLEvents {
    * Logs the value of the given parameters for the estimator being used in this session.
    */
   def logParams(hasParams: Params, params: Param[_]*): Unit = {
-    val pairs: Seq[(String, JValue)] = for {
-      p <- params
-      value <- hasParams.get(p)
-    } yield {
-      val cast = p.asInstanceOf[Param[Any]]
-      p.name -> parse(cast.jsonEncode(value))
+    logInfo {
+      val pairs: Seq[(String, JValue)] = for {
+        p <- params
+        value <- hasParams.get(p)
+      } yield {
+        val cast = p.asInstanceOf[Param[Any]]
+        p.name -> parse(cast.jsonEncode(value))
+      }
+      compact(render(map2jvalue(pairs.toMap)))
     }
-    logInfo(compact(render(map2jvalue(pairs.toMap))))
   }
 
   def logNumFeatures(num: Long): Unit = {

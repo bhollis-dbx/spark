@@ -45,32 +45,34 @@ class StatsReportListener extends SparkListener with Logging {
   }
 
   override def onStageCompleted(stageCompleted: SparkListenerStageCompleted): Unit = {
-    implicit val sc = stageCompleted
-    this.logInfo(
-      log"Finished stage: ${MDC(LogKeys.STAGE, getStatusDetail(stageCompleted.stageInfo))}")
-    showMillisDistribution("task runtime:", (info, _) => info.duration, taskInfoMetrics.toSeq)
+    if (log.isInfoEnabled) {
+      implicit val sc = stageCompleted
+      this.logInfo(
+        log"Finished stage: ${MDC(LogKeys.STAGE, getStatusDetail(stageCompleted.stageInfo))}")
+      showMillisDistribution("task runtime:", (info, _) => info.duration, taskInfoMetrics.toSeq)
 
-    // Shuffle write
-    showBytesDistribution("shuffle bytes written:",
-      (_, metric) => metric.shuffleWriteMetrics.bytesWritten, taskInfoMetrics.toSeq)
+      // Shuffle write
+      showBytesDistribution("shuffle bytes written:",
+        (_, metric) => metric.shuffleWriteMetrics.bytesWritten, taskInfoMetrics.toSeq)
 
-    // Fetch & I/O
-    showMillisDistribution("fetch wait time:",
-      (_, metric) => metric.shuffleReadMetrics.fetchWaitTime, taskInfoMetrics.toSeq)
-    showBytesDistribution("remote bytes read:",
-      (_, metric) => metric.shuffleReadMetrics.remoteBytesRead, taskInfoMetrics.toSeq)
-    showBytesDistribution("task result size:",
-      (_, metric) => metric.resultSize, taskInfoMetrics.toSeq)
+      // Fetch & I/O
+      showMillisDistribution("fetch wait time:",
+        (_, metric) => metric.shuffleReadMetrics.fetchWaitTime, taskInfoMetrics.toSeq)
+      showBytesDistribution("remote bytes read:",
+        (_, metric) => metric.shuffleReadMetrics.remoteBytesRead, taskInfoMetrics.toSeq)
+      showBytesDistribution("task result size:",
+        (_, metric) => metric.resultSize, taskInfoMetrics.toSeq)
 
-    // Runtime breakdown
-    val runtimePcts = taskInfoMetrics.map { case (info, metrics) =>
-      RuntimePercentage(info.duration, metrics)
+      // Runtime breakdown
+      val runtimePcts = taskInfoMetrics.map { case (info, metrics) =>
+        RuntimePercentage(info.duration, metrics)
+      }
+      showDistribution("executor (non-fetch) time pct: ",
+        Distribution(runtimePcts.map(_.executorPct * 100)), "%2.0f %%")
+      showDistribution("fetch wait time pct: ",
+        Distribution(runtimePcts.flatMap(_.fetchPct.map(_ * 100))), "%2.0f %%")
+      showDistribution("other time pct: ", Distribution(runtimePcts.map(_.other * 100)), "%2.0f %%")
     }
-    showDistribution("executor (non-fetch) time pct: ",
-      Distribution(runtimePcts.map(_.executorPct * 100)), "%2.0f %%")
-    showDistribution("fetch wait time pct: ",
-      Distribution(runtimePcts.flatMap(_.fetchPct.map(_ * 100))), "%2.0f %%")
-    showDistribution("other time pct: ", Distribution(runtimePcts.map(_.other * 100)), "%2.0f %%")
     taskInfoMetrics.clear()
   }
 

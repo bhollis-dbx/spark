@@ -103,7 +103,7 @@ private[spark] object PythonUtils extends Logging {
   }
 
   def logPythonInfo(pythonExec: String): Unit = {
-    if (SparkEnv.get.conf.get(Python.PYTHON_LOG_INFO)) {
+    if (SparkEnv.get.conf.get(Python.PYTHON_LOG_INFO) && log.isInfoEnabled) {
       import scala.sys.process._
       def runCommand(process: ProcessBuilder): Option[String] = {
         try {

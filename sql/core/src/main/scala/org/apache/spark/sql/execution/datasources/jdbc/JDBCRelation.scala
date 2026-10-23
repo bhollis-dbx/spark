@@ -169,9 +169,11 @@ private[sql] object JDBCRelation extends Logging {
       i = i + 1
     }
     val partitions = ans.toArray
-    val clauses = partitions.map(_.asInstanceOf[JDBCPartition].whereClause).mkString(", ")
-    logInfo(log"Number of partitions: ${MDC(NUM_PARTITIONS, numPartitions)}, " +
-      log"WHERE clauses of these partitions: ${MDC(CLAUSES, clauses)}")
+    logInfo {
+      val clauses = partitions.map(_.asInstanceOf[JDBCPartition].whereClause).mkString(", ")
+      log"Number of partitions: ${MDC(NUM_PARTITIONS, numPartitions)}, " +
+        log"WHERE clauses of these partitions: ${MDC(CLAUSES, clauses)}"
+    }
     partitions
   }
 
